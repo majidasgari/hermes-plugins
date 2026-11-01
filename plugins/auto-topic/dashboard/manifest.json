@@ -1,0 +1,7 @@
+{
+  "name": "auto-topic",
+  "label": "Auto Topic",
+  "description": "AI topic + emoji for chat titles",
+  "version": "1.0.0",
+  "api": "plugin_api.py"
+}

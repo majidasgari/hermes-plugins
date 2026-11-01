@@ -1,0 +1,5 @@
+name: file-opener
+version: 1.0.0
+description: "Open a local file in the desktop editor (Kate, else the OS default) — the backend route the Changes pane calls, because a renderer plugin cannot spawn a process"
+author: Max
+kind: standalone

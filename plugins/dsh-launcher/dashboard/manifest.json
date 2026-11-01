@@ -1,0 +1,7 @@
+{
+  "name": "dsh-launcher",
+  "label": "DeepSeek Harness Launcher",
+  "description": "Start dsh web if needed (default port 3080), then open it in the preview pane",
+  "version": "1.0.0",
+  "api": "plugin_api.py"
+}

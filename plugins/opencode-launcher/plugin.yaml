@@ -1,0 +1,5 @@
+name: opencode-launcher
+version: 2.0.0
+description: "One button (OpenCode v2) — make the shared opencode service exist (never restart one already answering), mint a one-time connect link with `opencode pair`, and open it in the Hermes preview browser (default port 49374)"
+author: Max
+kind: standalone

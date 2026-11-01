@@ -1,0 +1,33 @@
+/* فارسی‌ساز برای رابط وب DeepSeek Harness — همان قواعد افزونه‌ی فایرفاکس مکس.
+ *
+ * Mirrors `extension/content/content.css` of the farsi-helper add-on: the same
+ * attribute markers, the same three tiers (block / table cell / leaf text
+ * container) plus the form-field tier. Only the Persian/Arabic-bearing element
+ * flips to RTL — everything else stays LTR — and code stays LTR even inside a
+ * marked Persian paragraph (the carve-out below). */
+
+[data-fh-rtl-block],
+[data-fh-rtl-cell] {
+  direction: rtl !important;
+  text-align: right !important;
+  unicode-bidi: isolate !important;
+}
+[data-fh-rtl-field] {
+  direction: rtl !important;
+  text-align: right !important;
+}
+[data-fh-rtl-text] {
+  direction: rtl !important;
+  unicode-bidi: isolate !important;
+  text-align: right !important;
+}
+/* Inline code inside a Persian paragraph must stay LTR: without this the
+   direction: rtl of its marked ancestor reorders punctuation inside the code
+   span (same reason the add-on pins code to `ltr; isolate`). */
+[data-fh-rtl-block] :where(code, kbd, samp),
+[data-fh-rtl-cell] :where(code, kbd, samp),
+[data-fh-rtl-text] :where(code, kbd, samp) {
+  direction: ltr !important;
+  unicode-bidi: isolate !important;
+  text-align: left !important;
+}

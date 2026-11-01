@@ -1,0 +1,7 @@
+{
+  "name": "file-opener",
+  "label": "File Opener",
+  "description": "Open a local file in the desktop editor",
+  "version": "1.0.0",
+  "api": "plugin_api.py"
+}

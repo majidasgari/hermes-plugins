@@ -1,0 +1,5 @@
+name: auto-topic
+version: 1.0.0
+description: "AI-generated chat topics — an '✨ Auto-topic' button in the Rename dialog calls the model on the session transcript and fills in an emoji-prefixed title"
+author: Max
+kind: standalone

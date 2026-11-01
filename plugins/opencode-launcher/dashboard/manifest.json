@@ -1,0 +1,7 @@
+{
+  "name": "opencode-launcher",
+  "label": "OpenCode Launcher",
+  "description": "Ensure the shared opencode v2 service is up, mint a one-time connect link (opencode pair, default port 49374), then open it in the preview pane",
+  "version": "2.0.0",
+  "api": "plugin_api.py"
+}

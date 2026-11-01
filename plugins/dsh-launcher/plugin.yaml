@@ -1,0 +1,5 @@
+name: dsh-launcher
+version: 1.0.0
+description: "One button — make the DeepSeek Harness web UI exist (start `dsh web --no-open` if it isn't running, never restart it) and open it in the Hermes preview browser (default port 3080). Desktop half lives in the STANDALONE door: ~/.hermes/desktop-plugins/dsh-launcher/plugin.js — see README.md before moving it."
+author: Max
+kind: standalone

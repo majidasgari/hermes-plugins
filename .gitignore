@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+serve.log
+state.json
+.venv/
+node_modules/

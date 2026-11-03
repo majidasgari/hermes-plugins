@@ -54,3 +54,33 @@ hermes config set plugins.enabled.<id> true   # یا از Settings ▸ Plugins �
 - لاگ‌ها و فایل‌های وضعیت (`serve.log`، `state.json`) و `__pycache__` آپلود نمی‌شوند.
 - هر پلاگین یک فایل `plugin.js` مستقل است (ESM)؛ تنها importهای مجاز `@hermes/plugin-sdk` و `react` هستند.
 - وابستگی بیرونی ندارد؛ همه با API خود اپ کار می‌کنند و با آپدیت‌های Hermes ممکن است سلکتورهای DOM جابه‌جا شوند (بدترین حالت: یک ویژگی بی‌صدا از کار می‌افتد و بقیه سالم می‌مانند).
+
+## نیمهٔ ایجنت چطور بار می‌شود
+
+منیفست `plugin.yaml` کوچک است: `name` (باید همان نام پوشه باشد)، `version`، `description`، `author`، `kind: standalone`، و اگر لازم بود `provides_hooks` (مثل `pre_llm_call`، `pre_gateway_dispatch`) و `provides_commands`. منطق در `__init__.py` یا `plugin_api.py` است و **در زمان import** به ماژول‌های هرمس وصله می‌زند.
+
+- پوشه‌های `dashboard/` و `desktop/` داخل یک پلاگین ایجنت، بستهٔ سمت رابط‌اند (هرمز آن‌ها را در بستهٔ دسکتاپ می‌نشاند) — نه لایهٔ ایجنت.
+- **نیمهٔ پایتونی فقط با بستن و باز کردن دوبارهٔ برنامه بالا می‌آید**؛ «Reload desktop plugins» فقط نیمهٔ JS را تازه می‌کند.
+- وصلهٔ زمانِ import یعنی **هر پروسه جداگانه**: بک‌اند دسکتاپ و گیت‌وی systemd هر کدام باید ری‌استارت شوند.
+- فایل نشانگر `.hermes-package.json` (کنار `plugin.js`) پلاگین را به نصبِ **اختیاری** محدود می‌کند و چیپ/دکمه‌اش را پنهان می‌کند. در این مخزن این فایل نمی‌آید تا کپی تازه فعال نصب شود؛ اگر روی ماشین مقصد چنین فایلی ماند، پلاگین خاموش می‌ماند.
+- فایل‌های وضعیت محلی (`state.json`، `serve.log`، `__pycache__`) هرگز کامیت نمی‌شوند.
+
+## قاعدهٔ انتشار (برای پلاگین‌های تازه)
+
+پلاگینی که برای خودم/دسکتاپ نوشته می‌شود، **همیشه** از همین مخزن پوش می‌شود:
+
+```bash
+rsync -a --delete --exclude __pycache__ --exclude state.json --exclude serve.log \
+  ~/.hermes/plugins/<id>/ plugins/<id>/
+cp ~/.hermes/desktop-plugins/<id>/plugin.js desktop-plugins/<id>/plugin.js
+# یک ردیف در جدول بالا هم اضافه کن، بعد:
+git add -A && git commit -m "plugin: <id> — <چکار می‌کند>" && git push
+```
+
+پیش از پوش، یک چک امنیتی (این مخزن عمومی است):
+
+```bash
+grep -rniE 'api[_-]?key|secret|token|passw' plugins/<id> desktop-plugins/<id> && echo "بررسی کن!"
+```
+
+پلاگین‌های **شخص ثالث** (نصب‌شده از کاتالوگ، مثل `ponytail` یا `hermes-memory-ui`) هرگز اینجا کپی نمی‌شوند؛ خانهٔ خودشان را دارند.

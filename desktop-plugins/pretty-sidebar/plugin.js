@@ -1,79 +1,137 @@
 /**
  * Pretty Sidebar — Hermes desktop plugin.
  *
- * (A) COMPACT TOP NAV — the five labeled nav rows collapse into one icon strip.
+ * (A) ONE ⋯ MENU INSTEAD OF TWO BARS — the five nav rows (New session, Skills,
+ *     Messaging, Artifacts, Scheduled) and the section switcher (Pinned /
+ *     Sessions / platforms / Scheduled jobs) both fold into a single "⋯"
+ *     button at the right end of the Search-sessions row. Closed, the sidebar
+ *     gives away ZERO rows to either: the nav list is display:none, the
+ *     switcher is a floating card that only exists while the menu is open.
  * (B) SESSION ROWS AS CARDS — rounded, seam-separated cards; active session
  *     gets an accent fill + inset ring.
- * (C) BOTTOM SECTION TABS — Pinned / Sessions / Messaging platforms
- *     (Telegram, …) / Scheduled jobs become an ICON-ONLY tab dock at the
- *     BOTTOM of the sidebar (above the profile rail). Clicking a tab expands
- *     that ONE section (its native header toggle) and collapses + hides the
- *     rest, so only the chosen view takes space.
+ * (C) RTL TITLES — a row whose own text is RTL is drawn RTL + right-aligned.
  *
- * HOW THE TABS WORK (no app changes, all native affordances):
- *   - The sidebar's session wrapper ([data-sessions-mode]) stacks section
- *     roots (SidebarGroup divs) in a fixed order:
- *         [0] Pinned, [1] Sessions/Recents, [2..n-1] messaging platforms
- *         (Telegram, …), [last] Scheduled jobs (only when jobs exist).
- *   - Each section root's header holds a toggle button
- *     (`button.group\/section-label`) whose click flips the section's
- *     persisted open state; a closed section unmounts its content, so the
- *     layout math (flex sizing, virtualization) stays native and correct.
- *   - The dock is a plain DOM node React never knows about; a MutationObserver
- *     keeps it anchored above the profile rail and self-heals placement.
- *     Switching tabs clicks the native toggles (expand target, collapse the
- *     rest), then hides collapsed roots so the sidebar reads as one view.
- *     State persists like manual collapse does; removing the plugin leaves
- *     whatever collapse state was last set.
- *   - The dock hides while searching (results replace the wrapper's children)
- *     and in project/workspace views (sessions-mode != flat|archived).
+ * HOW (no app changes, native affordances only):
+ *   - The nav rows stay the app's OWN <ul> of real buttons — nothing is
+ *     cloned or moved, only re-positioned (fixed) while the menu is open, so
+ *     every native behaviour survives: split submenu, tooltips, keybind hints,
+ *     the "drag New session onto a zone" gesture, active-row state.
+ *   - The section list is our own card; a row click clicks the section's
+ *     native header toggle (expand target, collapse the rest) — the same
+ *     affordance a manual collapse uses, so layout math and virtualization
+ *     stay native. Non-active section roots are only display:none'd.
+ *   - Gating attribute is :root[data-pretty-menu] — set only while the trigger
+ *     is actually mounted. No trigger (collapsed rail, search view) → the app's
+ *     own nav stays exactly as shipped.
  *
- * DOM hook caveats: selectors rely on stable data attributes
- * (data-tour="sessions-sidebar", data-sessions-mode, data-tour^="sidebar-nav-")
- * and on class tokens that land verbatim in the class attribute
- * ('group/section-label', 'bg-(--ui-row-active-background)'). If a future app
- * version renames those, the worst case is a feature stops matching — the
- * rest of the styling stays intact. Tab icons are hand-drawn inline SVGs
- * (outline, currentColor) so nothing depends on the app's icon font.
+ * DOM hooks: data-tour="sessions-sidebar", data-sessions-mode, the nav rows'
+ * data-tour^="sidebar-nav-", the section headers' `group/section-label` class
+ * token, and the search row found from the sidebar's own <input>. A future
+ * rename costs one feature, not the styling.
  *
- * Save as: ~/.hermes/desktop-plugins/pretty-sidebar/plugin.js
- * (folder name == plugin id). Hot-reloads within seconds of the file landing;
- * if not, run "Reload desktop plugins" from ⌘K.
+ * Save as: ~/.hermes/desktop-plugins/pretty-sidebar/plugin.js (folder name ==
+ * plugin id). Hot-reloads within seconds; if not, ⌘K → "Reload desktop plugins".
  */
 
 const ID = 'pretty-sidebar'
 const STYLE_ID = 'hermes-plugin-pretty-sidebar'
-const TAB_BAR_ID = 'hermes-plugin-pretty-tabs'
+const PANEL_ID = 'hermes-plugin-pretty-menu'
+const TRIGGER_ID = 'hermes-plugin-pretty-trigger'
+const ROOT_ATTR = 'data-pretty-menu' // '' (ready) | 'open'
+
+const NAV_UL = "[data-tour='sessions-sidebar'] ul:has(> li [data-tour^='sidebar-nav-'])"
+const LABEL_BTN_SEL = 'button.group\\/section-label'
 
 // ============================================================ CSS
+const CARD = `
+  background: var(--ui-bg-elevated, #1c1c20) !important;
+  border: 1px solid var(--ui-stroke-tertiary, rgba(127, 127, 127, 0.25)) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22) !important;
+  padding: 4px !important;
+  max-height: calc(100vh - 96px) !important;
+  overflow-y: auto !important;
+`
+
 const CSS = `
-/* ---------- (A) Top nav → one horizontal icon strip ---------- */
-[data-tour='sessions-sidebar'] ul:has(> li [data-tour^='sidebar-nav-']) {
+/* ---------- (A) The nav rows become the top block of the ⋯ menu ---------- */
+:root[${ROOT_ATTR}] ${NAV_UL} {
+  display: none !important;
+}
+:root[${ROOT_ATTR}='open'] ${NAV_UL} {
   display: flex !important;
-  flex-direction: row !important;
-  align-items: center !important;
-  gap: 2px !important;
+  position: fixed !important;
+  z-index: 60 !important;
+  flex-direction: column !important;
+  gap: 1px !important;
+  ${CARD}
 }
-[data-tour='sessions-sidebar'] ul:has(> li [data-tour^='sidebar-nav-']) > li {
-  flex: 1 1 0 !important;
-  min-width: 0 !important;
+
+/* trigger: last thing on the Search-sessions row */
+#${TRIGGER_ID} {
+  appearance: none;
+  flex: 0 0 auto;
+  margin-left: auto;
+  height: 24px;
+  width: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ui-text-tertiary, inherit);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
 }
-[data-tour='sessions-sidebar'] [data-tour^='sidebar-nav-'] {
-  display: none !important;
+#${TRIGGER_ID}:hover,
+#${TRIGGER_ID}[aria-expanded='true'] {
+  background: color-mix(in srgb, var(--ui-accent, #0053fd) 12%, transparent);
+  color: var(--ui-text-primary, inherit);
 }
-[data-tour='sessions-sidebar'] ul:has(> li [data-tour^='sidebar-nav-']) button {
-  justify-content: center !important;
-  padding-left: 0 !important;
-  padding-right: 0 !important;
+#${TRIGGER_ID} svg {
+  display: block;
+  width: 15px;
+  height: 15px;
 }
-[data-tour='sessions-sidebar'] ul:has(> li [data-tour^='sidebar-nav-']) button .ml-auto {
-  display: none !important;
+
+/* section switcher: the second block of the same menu */
+#${PANEL_ID} {
+  display: none;
+  position: fixed;
+  z-index: 60;
+  ${CARD}
 }
-[data-tour='sessions-sidebar'] button:has(> [data-tour='sidebar-nav-new-session']) {
-  background: color-mix(in srgb, var(--ui-accent, #0053fd) 11%, transparent) !important;
+:root[${ROOT_ATTR}='open'] #${PANEL_ID} {
+  display: block;
 }
-[data-tour='sessions-sidebar'] button:has(> [data-tour='sidebar-nav-new-session']) svg {
-  color: var(--ui-accent, #0053fd) !important;
+#${PANEL_ID} button {
+  appearance: none;
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ui-text-secondary, inherit);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#${PANEL_ID} button:hover {
+  background: var(--ui-control-hover-background, rgba(127, 127, 127, 0.12));
+  color: var(--ui-text-primary, inherit);
+}
+#${PANEL_ID} button[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--ui-accent, #0053fd) 14%, transparent);
+  color: var(--ui-accent, #0053fd);
 }
 
 /* ---------- (B) Session rows as modern cards ---------- */
@@ -97,108 +155,50 @@ const CSS = `
 [data-sessions-mode] .row-hover[class~='bg-(--ui-row-open-background)'] {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ui-accent, #0053fd) 22%, transparent) !important;
 }
-
-/* ---------- (C) Bottom icon tab dock ---------- */
-.hermes-ptab-bar {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px 8px;
-  overflow: hidden;
-}
-.hermes-ptab-bar.hermes-ptab-hidden {
-  display: none !important;
-}
-.hermes-ptab {
-  appearance: none;
-  border: none;
-  background: transparent;
-  color: var(--ui-text-secondary, inherit);
-  flex: 1 1 0;
-  min-width: 0;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  cursor: pointer;
-  padding: 0;
-  transition: background 0.12s ease, color 0.12s ease;
-}
-.hermes-ptab svg {
-  display: block;
-  width: 14px;
-  height: 14px;
-}
-.hermes-ptab:hover {
-  background: color-mix(in srgb, var(--ui-accent, #0053fd) 9%, transparent);
-  color: var(--ui-text-primary, inherit);
-}
-.hermes-ptab[aria-pressed='true'] {
-  background: color-mix(in srgb, var(--ui-accent, #0053fd) 15%, transparent);
-  color: var(--ui-accent, #0053fd);
-}
 `
-
-// ============================================================ icons
-// Outline glyphs, hand-drawn on a 14x14 grid, all currentColor.
-const SVG_ATTRS =
-  'viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.25" ' +
-  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"'
-
-const ICON_PATHS = {
-  pin: [
-    // map pin: outer teardrop + inner dot
-    '<path d="M7 1.5c-2 0-3.6 1.5-3.6 3.5 0 2.6 3.6 6.5 3.6 6.5s3.6-3.9 3.6-6.5c0-2-1.6-3.5-3.6-3.5Z"/>',
-    '<path d="M7 6.7a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"/>'
-  ],
-  chat: [
-    // rounded bubble with a tail at bottom-left
-    '<path d="M1.7 3.1a1.4 1.4 0 0 1 1.4-1.4h7.8a1.4 1.4 0 0 1 1.4 1.4v4.4a1.4 1.4 0 0 1-1.4 1.4H6.6L4.5 12v-1.7H3.1A1.4 1.4 0 0 1 1.7 8.9V3.1Z"/>'
-  ],
-  plane: [
-    // paper plane pointing up-right, with the fold crease
-    '<path d="M1.7 7.4 12.7 1.4 9.2 12.6 7 9.2Z"/>',
-    '<path d="M12.7 1.4 7 9.2"/>'
-  ],
-  globe: [
-    '<circle cx="7" cy="7" r="5.7"/>',
-    '<path d="M1.4 7h11.2"/>',
-    '<path d="M7 1.3c-2.5 2.5-2.5 8.9 0 11.4M7 1.3c2.5 2.5 2.5 8.9 0 11.4"/>'
-  ],
-  clock: [
-    '<circle cx="7" cy="7" r="5.7"/>',
-    '<path d="M7 4.1V7l2.3 1.4"/>'
-  ]
-}
-
-function iconFor(index, sections, label) {
-  if (index === 0) return 'pin'
-  if (index === 1) return 'chat'
-  const l = (label || '').toLowerCase()
-  if (/(schedule|job|cron)/.test(l)) return 'clock'
-  if (l.includes('telegram')) return 'plane'
-  return 'globe'
-}
-
-function iconSVG(name) {
-  const paths = ICON_PATHS[name] || ICON_PATHS.globe
-  return `<svg ${SVG_ATTRS}>${paths.join('')}</svg>`
-}
 
 // ============================================================ shared state
 let recomputeTimer = null
 let activeTab = null // index into the last known section snapshot
+let menuWired = false
 
-const LABEL_BTN_SEL = 'button.group\\/section-label'
+const THREE_DOTS =
+  '<svg viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">' +
+  '<circle cx="2.9" cy="7" r="1.25"/><circle cx="7" cy="7" r="1.25"/><circle cx="11.1" cy="7" r="1.25"/></svg>'
+
+function root(el) {
+  return document.documentElement
+}
+
+function menuState() {
+  return root().getAttribute(ROOT_ATTR)
+}
+
+function setMenu(state) {
+  if (state) root().setAttribute(ROOT_ATTR, state)
+  else root().removeAttribute(ROOT_ATTR)
+  const trigger = document.getElementById(TRIGGER_ID)
+  if (trigger) trigger.setAttribute('aria-expanded', String(state === 'open'))
+}
+
+// ============================================================ sections
+function getSidebar() {
+  return document.querySelector('[data-tour="sessions-sidebar"]')
+}
+
+function getWrapper() {
+  return document.querySelector('[data-tour="sessions-sidebar"] [data-sessions-mode]')
+}
+
+function getSearchRow() {
+  const input = getSidebar()?.querySelector('input')
+  return input ? input.closest('div')?.parentElement ?? null : null
+}
 
 function labelOf(section) {
   const btn = section.querySelector(LABEL_BTN_SEL)
   if (!btn) return ''
-  // Prefer the actual caption (SidebarPanelLabel's truncated label span) so a
-  // platform avatar's own text never doubles into the label, e.g. a Telegram
-  // section read as 'Telegram' instead of 'TelegramTelegram'.
+  // The caption span, so a platform avatar's own text never doubles up.
   const caption = btn.querySelector('.truncate')
   const text = (caption ? caption.textContent : btn.textContent) || ''
   return text.replace(/\s+/g, ' ').trim()
@@ -209,162 +209,204 @@ function isSectionOpen(section) {
   return section.childElementCount > 1
 }
 
-function sectionToggle(section) {
-  return section.querySelector(LABEL_BTN_SEL)
+function collectSections(wrapper) {
+  return [...wrapper.children].filter(el => el.querySelector(LABEL_BTN_SEL))
 }
 
-// ============================================================ tab dock
-function buildTabButton(index, sections, host) {
-  const label = labelOf(sections[index]) || `Tab ${index + 1}`
+function buildPanel(sections) {
+  const panel = document.createElement('div')
+  panel.id = PANEL_ID
+  panel.setAttribute('role', 'menu')
+  sections.forEach((_, i) => panel.appendChild(buildPanelRow(i, sections)))
+  return panel
+}
+
+function buildPanelRow(index, sections) {
+  const label = labelOf(sections[index]) || `Section ${index + 1}`
   const btn = document.createElement('button')
   btn.type = 'button'
-  btn.className = 'hermes-ptab'
+  btn.textContent = label
   btn.title = label
-  btn.setAttribute('aria-label', label)
   btn.setAttribute('aria-pressed', 'false')
-  btn.innerHTML = iconSVG(iconFor(index, sections, label))
-  btn.addEventListener('click', () => onTabClick(index))
+  btn.addEventListener('click', () => onSectionPick(index))
   return btn
 }
 
-function buildTabBar(sections) {
-  const host = document.createElement('div')
-  host.id = TAB_BAR_ID
-  host.className = 'hermes-ptab-bar'
-  host.setAttribute('role', 'tablist')
-  sections.forEach((_, i) => host.appendChild(buildTabButton(i, sections, host)))
-  return host
-}
-
-function syncTabBar(host, sections) {
-  const labels = sections.map(s => labelOf(s) || '')
-  const key = labels.join('\u0001')
-  if (host.dataset.key === key) return
-  host.dataset.key = key
+function syncPanel(panel, sections) {
+  const key = sections.map(s => labelOf(s)).join('\u0001')
+  if (panel.dataset.key === key) return
+  panel.dataset.key = key
   const frag = document.createDocumentFragment()
-  sections.forEach((_, i) => frag.appendChild(buildTabButton(i, sections, host)))
-  host.replaceChildren(frag)
+  sections.forEach((_, i) => frag.appendChild(buildPanelRow(i, sections)))
+  panel.replaceChildren(frag)
 }
 
-// Collapse/expand native section toggles so exactly `activeIndex` is open,
-// then hide the other sections' roots entirely (clean single-view look).
+// Collapse/expand the native section toggles so exactly `activeIndex` is open,
+// then hide the other roots (display only — open state stays the app's).
 function applyTabs(sections, activeIndex) {
   sections.forEach((section, i) => {
     const target = i === activeIndex
-    const open = isSectionOpen(section)
-    const toggle = sectionToggle(section)
-    if (toggle && open !== target) {
-      toggle.click()
-    }
+    const toggle = section.querySelector(LABEL_BTN_SEL)
+    if (toggle && isSectionOpen(section) !== target) toggle.click()
     section.style.display = target ? '' : 'none'
   })
 }
 
-function onTabClick(index) {
+function onSectionPick(index) {
   const wrapper = getWrapper()
   if (!wrapper) return
   const sections = collectSections(wrapper)
   if (index < 0 || index >= sections.length) return
   activeTab = index
   applyTabs(sections, index)
-  // React mounts/unmounts content async; settle after the dust clears.
-  setTimeout(() => recompute(), 250)
+  closeMenu()
+  setTimeout(recompute, 250)
+}
+
+// ============================================================ menu
+function navList() {
+  return document.querySelector(NAV_UL)
+}
+
+function openMenu() {
+  const nav = navList()
+  if (!nav) return
+  setMenu('open')
+  if (!menuWired) {
+    menuWired = true
+    // A nav row click must run the app's own handler first (React listens at
+    // the root, i.e. after us) — close on the next tick.
+    nav.addEventListener('click', () => setTimeout(closeMenu, 0))
+    document.addEventListener(
+      'pointerdown',
+      event => {
+        if (menuState() !== 'open') return
+        const t = event.target
+        if (t.closest?.(`#${PANEL_ID}`) || t.closest?.(`#${TRIGGER_ID}`)) return
+        if (navList()?.contains(t)) return
+        closeMenu()
+      },
+      true
+    )
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') closeMenu()
+    })
+    window.addEventListener('resize', closeMenu)
+  }
+  place()
+}
+
+function closeMenu() {
+  if (menuState() === 'open') setMenu('ready')
+}
+
+function place() {
+  const trigger = document.getElementById(TRIGGER_ID)
+  const nav = navList()
+  const sidebar = getSidebar()
+  if (!trigger || !nav || !sidebar) return
+  const t = trigger.getBoundingClientRect()
+  const s = sidebar.getBoundingClientRect()
+  const top = t.bottom + 4
+  const left = s.left + 8
+  const width = Math.max(120, s.width - 16)
+  nav.style.left = `${left}px`
+  nav.style.top = `${top}px`
+  nav.style.width = `${width}px`
+  // The switcher card stacks under whatever height the nav block took.
+  const panel = document.getElementById(PANEL_ID)
+  if (panel) {
+    panel.style.left = `${left}px`
+    panel.style.top = `${top + (nav.getBoundingClientRect().height || 0) + 4}px`
+    panel.style.width = `${width}px`
+  }
 }
 
 // ============================================================ recompute
-function getWrapper() {
-  return document.querySelector('[data-tour="sessions-sidebar"] [data-sessions-mode]')
-}
-
-function collectSections(wrapper) {
-  // Only collapsible sections with a header toggle are tabbable.
-  return [...wrapper.children].filter(el => el.querySelector(LABEL_BTN_SEL))
-}
-
-function ensureDockPlacement(host, wrapper) {
-  // Dock sits at the bottom of the sidebar content, directly above the
-  // profile rail (the wrapper's last sibling when present).
-  const sc = wrapper.parentNode
-  const last = sc.lastElementChild
-  if (host.isConnected && host.parentNode === sc) {
-    if (last === host || host.nextElementSibling === last) return // already placed
-    host.remove()
+function ensureTrigger(row) {
+  let trigger = document.getElementById(TRIGGER_ID)
+  if (!trigger) {
+    trigger = document.createElement('button')
+    trigger.id = TRIGGER_ID
+    trigger.type = 'button'
+    trigger.title = 'منو'
+    trigger.setAttribute('aria-label', 'menu')
+    trigger.setAttribute('aria-expanded', 'false')
+    trigger.innerHTML = THREE_DOTS
+    trigger.addEventListener('click', () => {
+      if (menuState() === 'open') closeMenu()
+      else openMenu()
+    })
   }
-  if (last === wrapper || last === host) {
-    sc.appendChild(host) // no rail below the sessions area
-  } else {
-    sc.insertBefore(host, last)
-  }
+  // The row is the app's own block container; lay it out as a flex row so the
+  // trigger can take the empty space after the (content-sized) search field.
+  row.style.display = 'flex'
+  row.style.alignItems = 'center'
+  if (trigger.parentNode !== row) row.appendChild(trigger)
 }
 
 function recompute() {
   if (typeof document === 'undefined') return
   const wrapper = getWrapper()
-  let host = document.getElementById(TAB_BAR_ID)
+  const row = getSearchRow()
+  const panel = document.getElementById(PANEL_ID) || document.body.appendChild(buildPanel([]))
 
-  if (!wrapper) {
-    if (host) host.remove()
+  if (!wrapper || !row) {
+    // No sidebar / no search row (collapsed rail, search view): hand the
+    // sidebar back to the app untouched.
+    setMenu(null)
+    closePanelInto(panel)
     return
   }
+
+  ensureTrigger(row)
+  if (!menuState()) setMenu('ready')
 
   const mode = wrapper.getAttribute('data-sessions-mode')
   const sections = collectSections(wrapper)
-
-  // Tabs only make sense for the flat/archived stacks of >=2 collapsible
-  // sections. Search replaces the children with a results list; project /
-  // workspace views have their own chrome.
+  // One-view tabs need a stack of >=2 collapsible sections; search results and
+  // project views have their own chrome.
   const usable = (mode === 'flat' || mode === 'archived') && sections.length >= 2
 
   if (!usable) {
-    // Leave tab mode cleanly: undo any display:none we applied so native
-    // sections (search results, project view) are all visible again.
     ;[...wrapper.children].forEach(el => {
       el.style.display = ''
     })
-    if (host) host.classList.add('hermes-ptab-hidden')
+    panel.style.display = 'none'
+    closeMenu()
     return
   }
 
-  if (!host || !host.isConnected) {
-    host = buildTabBar(sections)
-    // ensureDockPlacement anchors it; do not append first or the dock lands
-    // below the profile rail.
-  } else {
-    syncTabBar(host, sections)
-  }
-  ensureDockPlacement(host, wrapper)
-  host.classList.remove('hermes-ptab-hidden')
+  syncPanel(panel, sections)
+  panel.style.display = ''
 
-  // Active tab: honor the previous choice when it still exists, else adopt
-  // the single open section, else fall back to Sessions (index 1). On the
-  // very first pass with several sections open, collapse the extras for real
-  // (native toggles) so only the Sessions view takes space from the start.
-  const firstDecision = activeTab === null
+  // Active tab: keep the previous pick when it still exists, else adopt the
+  // single open section, else Sessions (index 1).
   if (activeTab === null || activeTab >= sections.length) {
     let openIdx = -1
     let openCount = 0
     sections.forEach((s, i) => {
-      if (isSectionOpen(s)) {
-        if (openIdx < 0) openIdx = i
-        openCount += 1
-      }
+      if (!isSectionOpen(s)) return
+      if (openIdx < 0) openIdx = i
+      openCount += 1
     })
     activeTab = openCount === 1 ? openIdx : 1
-    if (firstDecision && openCount > 1) {
-      applyTabs(sections, activeTab)
-    }
+    if (openCount > 1) applyTabs(sections, activeTab)
   }
 
-  // Reflect which section is active on the dock icons.
-  ;[...host.children].forEach((btn, i) => {
+  ;[...panel.children].forEach((btn, i) => {
     btn.setAttribute('aria-pressed', String(i === activeTab))
   })
-
-  // Hide non-active roots (display only — open/collapse state stays native,
-  // so nothing here fights React or the persisted store).
   sections.forEach((section, i) => {
     section.style.display = i === activeTab ? '' : 'none'
   })
+
+  if (menuState() === 'open') place()
+}
+
+// The panel lives on <body>; when the sidebar is gone, park it out of the way.
+function closePanelInto(panel) {
+  if (panel) panel.style.display = 'none'
 }
 
 function scheduleRecompute() {
@@ -373,8 +415,8 @@ function scheduleRecompute() {
 }
 
 // ============================================================ nav titles
-function addNavTitles(root = document) {
-  root.querySelectorAll?.('[data-tour^="sidebar-nav-"]').forEach(span => {
+function addNavTitles(rootEl = document) {
+  rootEl.querySelectorAll?.('[data-tour^="sidebar-nav-"]').forEach(span => {
     const btn = span.closest('button')
     if (!btn || btn.dataset.prettySidebarTitle) return
     const text = (span.textContent || '').trim()
@@ -385,22 +427,13 @@ function addNavTitles(root = document) {
 }
 
 // ============================================================ RTL titles
-// A title is treated as right-to-left when it carries any character from an
-// RTL script (Arabic / Persian / Hebrew / presentation forms). Pure-Emoji or
-// accent-free Latin titles stay LTR — an emoji like 🚀 is not an RTL trigger.
+// A title is right-to-left when it carries any character from an RTL script.
+// Pure-Emoji or accent-free Latin titles stay LTR.
 const RTL_RE = /[\u0590-\u08ff\uFB1d-\uFDFD\uFE70-\uFEFF]/
 
-function isRtl(text) {
-  return RTL_RE.test(text || '')
-}
-
-// For every session row (projects/messaging rows too), make the title and the
-// preview line RTL + right-aligned when their own text is RTL; otherwise leave
-// the app's default LTR. Inline style survives React re-renders (row elements
-// are reused), and new rows are covered by the observer.
-function applyRtlTitles(root = document) {
-  root.querySelectorAll?.('[data-sessions-mode] .row-hover span.hover-marquee').forEach(el => {
-    const rtl = isRtl((el.textContent || '').trim())
+function applyRtlTitles(rootEl = document) {
+  rootEl.querySelectorAll?.('[data-sessions-mode] .row-hover span.hover-marquee').forEach(el => {
+    const rtl = RTL_RE.test(el.textContent || '')
     el.style.direction = rtl ? 'rtl' : ''
     el.style.textAlign = rtl ? 'right' : ''
   })
@@ -422,15 +455,14 @@ function installStyle() {
     style.id = STYLE_ID
     document.head.appendChild(style)
   }
-  // Always overwrite the live stylesheet so a hot-reloaded version replaces
-  // the previous build's CSS instead of finding it and skipping.
+  // Always overwrite: a hot reload must replace the previous build's CSS.
   style.textContent = CSS
 }
 
 export default {
   id: ID, // must match the folder name
   name: 'Pretty Sidebar',
-  register() {
+  register(ctx) {
     if (typeof document === 'undefined') return
 
     installStyle()
@@ -438,13 +470,11 @@ export default {
     recompute()
     applyRtlTitles()
 
-    // Latest version wins on hot-reload: drop any observer the previous build
-    // installed (its closure would otherwise keep driving the OLD logic and
-    // fight this one), then install ours.
+    // Latest build wins on hot reload: drop the previous one's observer and
+    // its markup-producing state, then install ours.
     const g = globalThis
-    if (g.__prettySidebarObserver) {
-      g.__prettySidebarObserver.disconnect()
-    }
+    if (g.__prettySidebarObserver) g.__prettySidebarObserver.disconnect()
+    menuWired = false
     observer = new MutationObserver(() => {
       addNavTitles()
       scheduleRecompute()
@@ -452,5 +482,17 @@ export default {
     })
     observer.observe(document.body, { childList: true, subtree: true })
     g.__prettySidebarObserver = observer
+
+    // Disposing (disable / reload) must leave the app exactly as shipped.
+    const teardown = () => {
+      observer?.disconnect()
+      document.getElementById(STYLE_ID)?.remove()
+      document.getElementById(TRIGGER_ID)?.remove()
+      document.getElementById(PANEL_ID)?.remove()
+      setMenu(null)
+      const wrapper = getWrapper()
+      wrapper && [...wrapper.children].forEach(el => (el.style.display = ''))
+    }
+    if (typeof ctx?.onDispose === 'function') ctx.onDispose(teardown)
   }
 }

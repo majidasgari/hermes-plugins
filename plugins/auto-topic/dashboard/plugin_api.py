@@ -394,6 +394,7 @@ def _title_provider() -> str:
 
 
 AUTO_EMOJI_STATUS = set_emoji_titles(emoji_titles_enabled())
+log.info("auto-topic: emoji titles %s (%s)", emoji_titles_enabled(), AUTO_EMOJI_STATUS)
 
 
 @router.post("/auto-topic")

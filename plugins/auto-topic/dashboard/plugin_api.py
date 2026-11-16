@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -32,6 +34,27 @@ _MAX_TITLE_CHARS = 80
 _REQUEST_TIMEOUT_S = 45.0
 _FALLBACK_EMOJI = "\U0001f4ac"  # 💬 — used only if the model forgets the emoji
 
+# --------------------------------------------------------------------------- settings
+# Emoji in titles is OFF by default: the model kept picking the same glyph for
+# unrelated chats, which reads as noise in the list. The flag lives in a small
+# state file beside this module (plugins have no config door of their own) and
+# is flipped from the desktop half's status-bar popover.
+_STATE_FILE = Path(__file__).resolve().with_name("state.json")
+_EMOJI_DEFAULT = False
+
+
+def emoji_titles_enabled() -> bool:
+    try:
+        return bool(json.loads(_STATE_FILE.read_text("utf-8")).get("emoji_titles", _EMOJI_DEFAULT))
+    except Exception:
+        return _EMOJI_DEFAULT
+
+
+def _save_emoji_titles(on: bool) -> None:
+    tmp = _STATE_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"emoji_titles": bool(on)}), "utf-8")
+    os.replace(tmp, _STATE_FILE)
+
 _TITLE_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
@@ -46,20 +69,29 @@ _TITLE_SCHEMA = {
     },
 }
 
-_SYSTEM_PROMPT = (
-    "You name chat sessions. Read the conversation and write a short topic title "
-    "that lets the owner find this chat again in a list.\n\n"
-    "Rules:\n"
+_EMOJI_ASK = (
     "- The title MUST start with exactly ONE relevant emoji, then a space, then "
     "2-7 words naming the topic (example: \U0001f9ee Fix Postgres pool exhaustion).\n"
     "- The emoji must match the topic: server \u2192 \U0001f5a5\ufe0f, deploy \u2192 \U0001f680, "
     "payment \u2192 \U0001f4b3, chat/telegram \u2192 \U0001f4ac, bug \u2192 \U0001f41b, \u2026\n"
+)
+
+_SYSTEM_PROMPT = (
+    "You name chat sessions. Read the conversation and write a short topic title "
+    "that lets the owner find this chat again in a list.\n\n"
+    "Rules:\n"
+    "{EMOJI_RULE}"
     "- Write the title in the same language as the conversation.\n"
     "- Name what the user wants done; keep technical terms, filenames, numbers "
     "and error codes exact.\n"
     "- No quotes, no 'Title:' prefix, no trailing punctuation.\n"
     'Reply with JSON only: {"title": "..."}'
 )
+
+
+def _system_prompt() -> str:
+    rule = _EMOJI_ASK if emoji_titles_enabled() else "- No emoji anywhere in the title.\n"
+    return _SYSTEM_PROMPT.replace("{EMOJI_RULE}", rule)
 
 
 # --------------------------------------------------------------------------- request model
@@ -186,20 +218,23 @@ def _parse_title(content: str) -> str:
 
 
 def _finalize(raw: str) -> str:
-    """Normalize + enforce the leading emoji on a model title."""
+    """Normalize a model title; enforce (or strip) the leading emoji."""
     raw = re.sub(r"\s+", " ", raw.strip().strip("\"'"))
     if raw.lower().startswith("title:"):
         raw = raw[6:].strip()
     raw = raw.rstrip(".,;!?")
 
-    if raw and _first_char_is_emoji(raw):
+    if not emoji_titles_enabled():
+        # A model that painted one anyway loses it, variation selector included.
+        if raw and _first_char_is_emoji(raw):
+            raw = raw[1:].lstrip().lstrip("\ufe0f\u200d ")
+        title = raw
+    elif raw and _first_char_is_emoji(raw):
         emoji = raw[0]
         rest = raw[1:].lstrip()
+        title = f"{emoji} {rest}" if rest else emoji
     else:
-        emoji = _FALLBACK_EMOJI
-        rest = raw
-
-    title = f"{emoji} {rest}" if rest else emoji
+        title = f"{_FALLBACK_EMOJI} {raw}" if raw else _FALLBACK_EMOJI
     title = re.sub(r"\s+", " ", title)
     if len(title) > _MAX_TITLE_CHARS:
         title = title[: _MAX_TITLE_CHARS - 3].rstrip() + "..."
@@ -222,7 +257,7 @@ def _suggest_title(conv: str) -> str:
         response = call_llm(
             task="title_generation",
             messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": _system_prompt()},
                 {"role": "user", "content": f"<conversation>\n{conv}\n</conversation>"},
             ],
             max_tokens=64,
@@ -242,10 +277,26 @@ def _suggest_title(conv: str) -> str:
 def auto_topic_status():
     """What the automatic half installed at import time (for verification)."""
     return {
+        "emoji_titles": emoji_titles_enabled(),
         "auto_emoji_titles": AUTO_EMOJI_STATUS,
         "prompt_patched": bool(getattr(_tg(), "_HERMES_AUTO_TOPIC_EMOJI", False)),
         "provider": _title_provider(),
     }
+
+
+class EmojiConfigBody(BaseModel):
+    emoji_titles: bool
+
+
+@router.get("/auto-topic/config")
+def auto_topic_config():
+    return {"emoji_titles": emoji_titles_enabled()}
+
+
+@router.post("/auto-topic/config")
+def set_auto_topic_config(body: EmojiConfigBody):
+    """Flip the emoji switch: persist it AND retract (or re-apply) the titler patch."""
+    return {"emoji_titles": body.emoji_titles, "applied": set_emoji_titles(body.emoji_titles)}
 
 
 # --------------------------------------------------------------------------- automatic mode
@@ -279,20 +330,37 @@ def _ensure_emoji(title: Optional[str]) -> Optional[str]:
     return f"{_FALLBACK_EMOJI} {title}".strip()
 
 
-def install_auto_emoji_titles() -> str:
-    """Make the app's own auto-titler emit emoji-first titles, everywhere."""
+def set_emoji_titles(on: bool) -> str:
+    """Persist the switch and install/retract the emoji rule on the app's titler."""
+    _save_emoji_titles(on)
     try:
         tg = _tg()
     except Exception as exc:
         log.warning("auto-topic: title_generator unavailable: %s", exc)
         return f"unavailable: {exc}"
 
+    if not on:
+        # Put the titler back exactly as shipped; the module may be imported by a
+        # long-lived gateway, so a setting flip must be reversible in place.
+        originals = globals().get("_TG_ORIGINALS") or {}
+        if originals.get("prompt") is not None:
+            tg._TITLE_PROMPT_TEMPLATE = originals["prompt"]
+        if originals.get("generate") is not None:
+            tg.generate_title = originals["generate"]
+        tg._HERMES_AUTO_TOPIC_EMOJI = False
+        globals()["_TG_ORIGINALS"] = {}
+        if originals:
+            log.info("auto-topic: emoji titles turned off")
+        return "off" if originals else "off (was not installed)"
+
     if getattr(tg, "_HERMES_AUTO_TOPIC_EMOJI", False):
         return "already installed"
 
     applied = []
+    originals = {"prompt": getattr(tg, "_TITLE_PROMPT_TEMPLATE", None)}
+    globals()["_TG_ORIGINALS"] = originals
 
-    prompt = getattr(tg, "_TITLE_PROMPT_TEMPLATE", None)
+    prompt = originals["prompt"]
     if isinstance(prompt, str) and "ONE emoji that fits the topic" not in prompt:
         if _EMOJI_RULE_ANCHOR in prompt:
             tg._TITLE_PROMPT_TEMPLATE = prompt.replace(_EMOJI_RULE_ANCHOR, _EMOJI_RULE, 1)
@@ -303,6 +371,8 @@ def install_auto_emoji_titles() -> str:
 
     generate = getattr(tg, "generate_title", None)
     if callable(generate) and not getattr(generate, "_hermes_auto_topic_wrapped", False):
+        originals["generate"] = generate
+
         def _generate_title_emoji_first(*args, **kwargs):
             return _ensure_emoji(generate(*args, **kwargs))
 
@@ -323,7 +393,7 @@ def _title_provider() -> str:
         return "unknown"
 
 
-AUTO_EMOJI_STATUS = install_auto_emoji_titles()
+AUTO_EMOJI_STATUS = set_emoji_titles(emoji_titles_enabled())
 
 
 @router.post("/auto-topic")

@@ -6,8 +6,10 @@
  * 1) TITLE BUTTON — injects an "✨ Auto-topic" button into the session Rename
  *    dialog (RenameSessionDialog, session-actions-menu.tsx). Clicking it asks the
  *    plugin's Python backend (ctx.rest → /api/plugins/auto-topic/auto-topic) to
- *    read the session transcript and produce an AI topic prefixed with a
- *    relevant emoji. The result fills the dialog input (React-safe native
+ *    read the session transcript and produce an AI topic. Emoji in titles is a
+ *    SWITCH in this chip's popover, persisted by the backend and OFF by
+ *    default (the model kept reusing the same glyph for unrelated chats).
+ *    The result fills the dialog input (React-safe native
  *    setter + input event); pressing Save/Enter runs the app's own rename flow
  *    — provenance, store sync, and error toasts all stay app-native.
  *
@@ -45,7 +47,7 @@
  * actually loads).
  */
 
-import { createElement as h, useCallback, useState } from 'react'
+import { createElement as h, useCallback, useEffect, useState } from 'react'
 
 import {
   host,
@@ -423,6 +425,26 @@ function dot(color) {
 function TopicColorChip({ ctx }) {
   const [settings, setSettings] = useState(() => readSettings(ctx.storage))
   const [open, setOpen] = useState(false)
+  // Emoji lives in the BACKEND (it patches the app's own titler), so the switch
+  // reads it on open and writes through the plugin's API — not localStorage.
+  const [emoji, setEmoji] = useState(false)
+
+  useEffect(() => {
+    if (open) {
+      ctx
+        .rest('/auto-topic/config')
+        .then(res => setEmoji(Boolean(res && res.emoji_titles)))
+        .catch(() => {})
+    }
+  }, [ctx, open])
+
+  const toggleEmoji = useCallback(
+    value => {
+      setEmoji(value)
+      ctx.rest('/auto-topic/config', { method: 'POST', body: { emoji_titles: value } }).catch(() => setEmoji(!value))
+    },
+    [ctx]
+  )
 
   const onOpenChange = useCallback(
     next => {
@@ -471,6 +493,12 @@ function TopicColorChip({ ctx }) {
         'div',
         { style: { display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' } },
         h('div', { style: { fontSize: '12px', fontWeight: 600 } }, 'رنگ خودکار تاپیک‌ها'),
+        h(
+          'div',
+          { style: { ...ROW_STYLE, justifyContent: 'space-between', gap: '10px' } },
+          h('span', { style: { color: 'var(--ui-text-tertiary)', fontSize: '11px' } }, 'ایموجی اول عنوان'),
+          h(Switch, { checked: emoji, onCheckedChange: toggleEmoji, size: 'xs' })
+        ),
         h(
           'div',
           { style: { ...ROW_STYLE, justifyContent: 'space-between', gap: '10px' } },

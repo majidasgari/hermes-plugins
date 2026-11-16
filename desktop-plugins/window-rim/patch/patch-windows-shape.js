@@ -131,12 +131,20 @@ const PAYLOAD = `${BEGIN}
       return { dx: 0, dy: 0, h: bounds.height, r: radius, w: bounds.width }
     }
     var scale = g.cssW > 0 ? bounds.width / g.cssW : g.dpr
+    var dx = Math.round(bounds.x - g.screenX)
+    var dy = Math.round(bounds.y - g.screenY)
+    // The renderer's surface is the CLIENT size but sits at the WINDOW's
+    // corner, so with the region anchored at the client origin the last dx
+    // columns of the client are never painted by the page — they show the
+    // window's background as a WHITE STRIP down the right edge. Cutting dx
+    // off the width removes it and leaves the rim's own border (one pixel
+    // before that) visible.
     return {
-      dx: Math.round(bounds.x - g.screenX),
-      dy: Math.round(bounds.y - g.screenY),
-      h: Math.max(0, bounds.height),
+      dx: dx,
+      dy: dy,
+      h: Math.max(0, bounds.height - dy),
       r: Math.max(0, Math.round(radius * (scale > 0 ? scale : 1))),
-      w: Math.max(0, bounds.width)
+      w: Math.max(0, bounds.width - dx)
     }
   }
 

@@ -55,6 +55,13 @@ const CARD = `
 
 const CSS = `
 /* ---------- (A) The nav rows become the top block of the ⋯ menu ---------- */
+/* The nav group's own 6px+8px padding would still hold a band of nothing once
+   its rows leave the flow. Zero the padding, NOT the group: a fixed child of a
+   display:none box renders nothing, so the menu could never open. */
+:root[${ROOT_ATTR}] [data-tour='sessions-sidebar'] > div > div:has(ul > li [data-tour^='sidebar-nav-']) {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
 :root[${ROOT_ATTR}] ${NAV_UL} {
   display: none !important;
 }

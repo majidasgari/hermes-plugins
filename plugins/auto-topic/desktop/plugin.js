@@ -189,8 +189,25 @@ function topicWords(text) {
     .filter(Boolean)
 }
 
+/** Stable pseudo-random colour for a title that matches nothing typed: the same
+ *  title always lands on the same colour, and different chats spread across the
+ *  palette the way the old leading emoji used to. Without this, turning emoji
+ *  off left every session colourless (nothing left to classify on). */
+function fallbackColor(normalizedTitle) {
+  // FNV-1a: cheap, and it spreads near-identical titles (same prefix, one word
+  // apart) across the palette instead of clustering them.
+  let hash = 2166136261
+
+  for (const ch of normalizedTitle) {
+    hash = Math.imul(hash ^ ch.codePointAt(0), 16777619) >>> 0
+  }
+
+  return COLOR_ROWS[hash % COLOR_ROWS.length]
+}
+
 /** The colour a title belongs to: the leading emoji first, then the first colour
- *  (in palette order) whose typed topic appears in the title. */
+ *  (in palette order) whose typed topic appears in the title, else the stable
+ *  hash colour. */
 function classify(settings, title) {
   const normalized = normalizeTitle(title)
 
@@ -210,7 +227,7 @@ function classify(settings, title) {
     }
   }
 
-  return null
+  return fallbackColor(normalized)
 }
 
 // ============================================================ colour assignment

@@ -270,12 +270,22 @@ const CAN_SHAPE_WINDOW = shapeBridge() !== null
  *  platforms the app's own core CSS (or nothing) handles the radius. */
 const IS_WINDOWS_UI = typeof navigator !== 'undefined' && /^win/i.test(navigator.platform || '')
 
+// Last viewport geometry reported to the main process.
+let reportedViewport = ''
+
 /** Round the window itself. Renderer CSS cannot do that: the window is an
  *  opaque rectangle (on Windows `transparent: true` breaks resizable windows,
  *  which is why the app refuses it), so the shape has to be a native region.
- *  With the patch in place the preload relays the radius to the main process,
+ *  With the patch in place the preload relays the geometry to the main process,
  *  which calls setShape() on every window; without it this is a no-op and the
- *  radius only rounds the rim stroke. */
+ *  radius only rounds the rim stroke.
+ *
+ *  The region is native PIXELS measured from the WINDOW's corner, while this
+ *  control is CSS px measured from the CLIENT area — so the viewport, the
+ *  devicePixelRatio and the window's screen position all travel with it. The
+ *  client inset (8 px on the sides of a frameless Windows window) is derived
+ *  from screenX/screenY; without it the region sits 8 px to the left and
+ *  shaves the rim off the right edge — the "white bar on the right". */
 function applyWindowShape(radius) {
   const bridge = shapeBridge()
 
@@ -283,8 +293,21 @@ function applyWindowShape(radius) {
     return
   }
 
+  const width = window.innerWidth
+  const height = window.innerHeight
+  const dpr = window.devicePixelRatio || 1
+
+  reportedViewport = `${width}x${height}@${dpr}`
+
   try {
-    bridge.setWindowShape(radius)
+    bridge.setWindowShape({
+      dpr,
+      height,
+      radius,
+      screenX: window.screenX,
+      screenY: window.screenY,
+      width
+    })
   } catch {
     /* never fatal: the rim still paints */
   }
@@ -595,6 +618,16 @@ export default {
 
     if (dom) {
       const onFocus = () => syncFocus(dom.rim)
+
+      // The region is sized from THIS viewport, so a resize re-reports it.
+      // (The main process also repaints synchronously on resize; this only
+      // refreshes the CSS size its delta is measured from.)
+      let resizeTimer = 0
+
+      ctx?.addEventListener?.(window, 'resize', () => {
+        window.clearTimeout(resizeTimer)
+        resizeTimer = window.setTimeout(() => applyWindowShape(current.radius), 150)
+      })
 
       // Scoped listeners: the host removes them on reload/disable, so a stale
       // build can never keep reacting to focus changes.

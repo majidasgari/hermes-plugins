@@ -14,9 +14,17 @@
  *
  * This script appends a small bootstrap to the BUILT main bundle
  * (resources/app.asar.unpacked/dist/electron-main.mjs) and exposes one
- * preload call (`window.hermesDesktop.setWindowShape(px)`), which the
- * `window-rim` desktop plugin drives from its radius control. Radius 0
- * removes the region, i.e. the stock rectangle.
+ * preload call (`window.hermesDesktop.setWindowShape({ radius, dpr, width,
+ * height })`), which the `window-rim` desktop plugin drives from its radius
+ * control. Radius 0 removes the region, i.e. the stock rectangle.
+ *
+ * GEOMETRY (learned the hard way): a region is in PHYSICAL pixels of the
+ * window, while the radius control is CSS px. The renderer's CSS viewport is
+ * the app's painted surface, so the region is `ceil(cssW * dpr) x
+ * ceil(cssH * dpr)` with corner radius `radius * dpr`. Using `getBounds()`
+ * alone drops the fractional pixel of a scaled display (1.1 here), which
+ * shaves the last column/row off the app — cutting the rim's right edge and
+ * leaving a borderless white strip.
  *
  * Usage:
  *   node patch-windows-shape.js status
@@ -35,7 +43,7 @@ const path = require('node:path')
 const BEGIN = '/* hermes-window-shape:begin */'
 const END = '/* hermes-window-shape:end */'
 const PRELOAD_ANCHOR = '  getConnection: (profile, opts) => import_electron.ipcRenderer.invoke("hermes:connection", profile, opts),'
-const PRELOAD_LINE = '  setWindowShape: (radius) => import_electron.ipcRenderer.send("hermes:window:shape", radius),'
+const PRELOAD_LINE = '  setWindowShape: (payload) => import_electron.ipcRenderer.send("hermes:window:shape", payload),'
 
 const PAYLOAD = `${BEGIN}
 ;(function () {
@@ -54,15 +62,18 @@ const PAYLOAD = `${BEGIN}
   var SKIP = { hud: 1, overlay: 1, quick: 1, wake: 1, intro: 1 }
   var FILE = pathMod.join(electron.app.getPath('userData'), 'window-shape.json')
   var shaped = new WeakMap()
+  var geometry = new WeakMap()
   var watched = new WeakSet()
   var timers = new WeakMap()
 
+  function clampRadius(value) {
+    var n = Number(value)
+    return isFinite(n) ? Math.max(0, Math.min(64, Math.round(n))) : 0
+  }
+
   function readRadius() {
     try {
-      var raw = JSON.parse(fsMod.readFileSync(FILE, 'utf8'))
-      var n = Number(raw && raw.radius)
-      if (!isFinite(n)) return 0
-      return Math.max(0, Math.min(64, Math.round(n)))
+      return clampRadius(JSON.parse(fsMod.readFileSync(FILE, 'utf8')).radius)
     } catch (error) {
       return 0
     }
@@ -70,22 +81,24 @@ const PAYLOAD = `${BEGIN}
 
   var radius = readRadius()
 
-  function cornerRects(w, h, r) {
+  // Rounded rect as a scanline region. Rows whose inset rounds to 0 are still
+  // emitted (as full-width rows): skipping them leaves a transparent band a few
+  // pixels inside the top and bottom edges, between the corner rows and the
+  // middle rect.
+  function cornerRects(w, h, r, dx, dy) {
     r = Math.max(0, Math.min(Math.round(r), Math.floor(Math.min(w, h) / 2)))
     var list = []
     if (!r) return list
+    var ox = dx || 0
+    var oy = dy || 0
     for (var y = 0; y < r; y++) {
-      var dy = r - y - 0.5
-      var inset = Math.round(r - Math.sqrt(Math.max(0, r * r - dy * dy)))
+      var drop = r - y - 0.5
+      var inset = Math.round(r - Math.sqrt(Math.max(0, r * r - drop * drop)))
       var width = Math.max(0, w - inset * 2)
-      // NEVER skip a row whose inset rounds to 0: those are the rows closest to
-      // the straight edge, and the middle rect only starts at y=r — skipping
-      // them leaves a ~5 px TRANSPARENT BAND across the window, just inside the
-      // top and bottom edges. An inset of 0 is simply a full-width row.
-      list.push({ x: inset, y: y, width: width, height: 1 })
-      list.push({ x: inset, y: h - 1 - y, width: width, height: 1 })
+      list.push({ x: ox + inset, y: oy + y, width: width, height: 1 })
+      list.push({ x: ox + inset, y: oy + h - 1 - y, width: width, height: 1 })
     }
-    list.push({ x: 0, y: r, width: w, height: Math.max(0, h - r * 2) })
+    list.push({ x: ox, y: oy + r, width: w, height: Math.max(0, h - r * 2) })
     return list
   }
 
@@ -99,6 +112,31 @@ const PAYLOAD = `${BEGIN}
       return !!(kind && SKIP[kind])
     } catch (error) {
       return null
+    }
+  }
+
+  // Region geometry, in the coordinates setShape actually uses (verified on
+  // Windows 10 + Electron 44: rects are measured from the HWND's top-left
+  // corner, NOT from the client origin — a frameless window's client is inset
+  // 8 px on the left/right and 8 px at the bottom, so an un-offset region is
+  // shifted left and shaves the rim off the right edge).
+  //
+  // getBounds() returns the CLIENT rect while the renderer's window.screenX/Y
+  // is the HWND origin, so (bounds - screen) is exactly the client inset.
+  // The scale comes from the same pair: clientPhysicalWidth / cssViewportWidth.
+  function regionFor(win) {
+    var bounds = win.getBounds()
+    var g = geometry.get(win)
+    if (!g) {
+      return { dx: 0, dy: 0, h: bounds.height, r: radius, w: bounds.width }
+    }
+    var scale = g.cssW > 0 ? bounds.width / g.cssW : g.dpr
+    return {
+      dx: Math.round(bounds.x - g.screenX),
+      dy: Math.round(bounds.y - g.screenY),
+      h: Math.max(0, bounds.height),
+      r: Math.max(0, Math.round(radius * (scale > 0 ? scale : 1))),
+      w: Math.max(0, bounds.width)
     }
   }
 
@@ -116,9 +154,9 @@ const PAYLOAD = `${BEGIN}
         }
         return
       }
-      var b = win.getBounds()
-      if (b.width < radius * 2 + 4 || b.height < radius * 2 + 4) return
-      win.setShape(cornerRects(b.width, b.height, radius))
+      var region = regionFor(win)
+      if (region.w < region.r * 2 + 4 || region.h < region.r * 2 + 4) return
+      win.setShape(cornerRects(region.w, region.h, region.r, region.dx, region.dy))
       shaped.set(win, true)
     } catch (error) {
       console.error('[hermes-window-shape] paint failed:', error && error.message)
@@ -138,8 +176,8 @@ const PAYLOAD = `${BEGIN}
     // Geometry events repaint SYNCHRONOUSLY: a region is in window coordinates,
     // so a stale one clips the new area until it is replaced — during a resize
     // drag that reads as a chopped window edge.
-    var geometry = ['resize', 'maximize', 'unmaximize', 'restore', 'enter-full-screen', 'leave-full-screen']
-    geometry.forEach(function (name) {
+    var geometryEvents = ['resize', 'maximize', 'unmaximize', 'restore', 'enter-full-screen', 'leave-full-screen']
+    geometryEvents.forEach(function (name) {
       win.on(name, function () { paint(win) })
     })
     win.on('show', function () { schedule(win) })
@@ -153,17 +191,35 @@ const PAYLOAD = `${BEGIN}
     electron.BrowserWindow.getAllWindows().forEach(watch)
   })
 
-  electron.ipcMain.on('hermes:window:shape', function (event, value) {
-    var n = Number(value)
-    n = isFinite(n) ? Math.max(0, Math.min(64, Math.round(n))) : 0
-    if (n === radius) return
-    radius = n
+  electron.ipcMain.on('hermes:window:shape', function (event, payload) {
+    var data = typeof payload === 'number' ? { radius: payload } : (payload || {})
+    radius = clampRadius(data.radius)
+    var win = null
+    try {
+      win = electron.BrowserWindow.fromWebContents(event.sender)
+    } catch (error) {}
+    if (win) {
+      var dpr = Number(data.dpr)
+      var cssW = Number(data.width)
+      var cssH = Number(data.height)
+      var screenX = Number(data.screenX)
+      var screenY = Number(data.screenY)
+      if (isFinite(dpr) && dpr > 0 && isFinite(cssW) && cssW > 0 && isFinite(cssH) && cssH > 0) {
+        geometry.set(win, {
+          cssH: cssH,
+          cssW: cssW,
+          dpr: dpr,
+          screenX: isFinite(screenX) ? screenX : win.getBounds().x,
+          screenY: isFinite(screenY) ? screenY : win.getBounds().y
+        })
+      }
+      paint(win)
+    }
     try {
       fsMod.writeFileSync(FILE, JSON.stringify({ radius: radius }, null, 2))
     } catch (error) {}
-    electron.BrowserWindow.getAllWindows().forEach(function (win) {
-      shaped.set(win, false)
-      paint(win)
+    electron.BrowserWindow.getAllWindows().forEach(function (other) {
+      if (other !== win) paint(other)
     })
   })
 
@@ -207,7 +263,7 @@ function stripPayload(source) {
   let before = start
   if (source[before - 1] === '\n') before -= 1
   if (source[before - 1] === '\r') before -= 1
-  return source.slice(0, before) + source.slice(after ? after : end + END.length)
+  return source.slice(0, before) + source.slice(after)
 }
 
 function patchMain(source) {

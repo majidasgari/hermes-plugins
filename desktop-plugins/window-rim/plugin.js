@@ -26,6 +26,16 @@
  *    desktop shows through the four corner slivers. Radius 0 = the plain
  *    rectangle, attribute removed.
  *
+ *    WINDOWS is different, and it is NOT CSS: the windows there are opaque and
+ *    resizable (`transparent: true` breaks resizable windows — electron#48421),
+ *    so a radius that only bends the rim stroke leaves the square corner and
+ *    whatever the app paints in it visible — the "black corner" the user sees.
+ *    The real fix is a native window REGION: patch/patch-windows-shape.js
+ *    appends a bootstrap to the built main bundle (BaseWindow.setShape) and
+ *    exposes window.hermesDesktop.setWindowShape(px); apply() calls it, so the
+ *    window's own corners are cut and the desktop shows through. Without that
+ *    patch the bridge is absent, apply() is a no-op, and the popover says so.
+ *
  *    NOT on Settings ▸ Appearance, deliberately: that page mounts its plugin
  *    slot (`appearance.extra`) only while `subpage === undefined`, and the
  *    settings router resolves a subpage for EVERY view — `resolveSettingsSubpage`
@@ -241,8 +251,49 @@ function syncFocus(rim) {
   }
 }
 
+/** The Windows shape bridge, when this install carries the patch
+ *  (patch/patch-windows-shape.js). Absent on a stock build. */
+function shapeBridge() {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  const bridge = window.hermesDesktop
+
+  return bridge && typeof bridge.setWindowShape === 'function' ? bridge : null
+}
+
+/** True when THIS window's native corners can really be rounded. */
+const CAN_SHAPE_WINDOW = shapeBridge() !== null
+
+/** Windows can only round its windows through the shape patch; on other
+ *  platforms the app's own core CSS (or nothing) handles the radius. */
+const IS_WINDOWS_UI = typeof navigator !== 'undefined' && /^win/i.test(navigator.platform || '')
+
+/** Round the window itself. Renderer CSS cannot do that: the window is an
+ *  opaque rectangle (on Windows `transparent: true` breaks resizable windows,
+ *  which is why the app refuses it), so the shape has to be a native region.
+ *  With the patch in place the preload relays the radius to the main process,
+ *  which calls setShape() on every window; without it this is a no-op and the
+ *  radius only rounds the rim stroke. */
+function applyWindowShape(radius) {
+  const bridge = shapeBridge()
+
+  if (!bridge) {
+    return
+  }
+
+  try {
+    bridge.setWindowShape(radius)
+  } catch {
+    /* never fatal: the rim still paints */
+  }
+}
+
 /** Paint the current settings into the live stylesheet + rim node. */
 function apply() {
+  applyWindowShape(current.radius)
+
   const style = document.getElementById(STYLE_ID)
   const rim = document.getElementById(RIM_ID)
   const root = document.documentElement
@@ -462,6 +513,13 @@ function RimChip({ ctx }) {
             )
           )
         ),
+        IS_WINDOWS_UI && !CAN_SHAPE_WINDOW
+          ? h(
+              'div',
+              { style: { color: 'var(--ui-text-tertiary, #8b8f98)', fontSize: '10px', lineHeight: 1.7 } },
+              'گردی گوشه‌ی خود پنجره در ویندوز به پچ نیاز دارد: patch/patch-windows-shape.js'
+            )
+          : null,
         toggleRow('کمرنگ در حالت بی‌فوکوس', settings.dimUnfocused, value => update({ dimUnfocused: value })),
         toggleRow('خط مویی درونی', settings.hairline, value => update({ hairline: value })),
         toggleRow('درخشش', settings.glow, value => update({ glow: value }))

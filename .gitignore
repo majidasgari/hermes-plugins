@@ -4,3 +4,6 @@ serve.log
 state.json
 .venv/
 node_modules/
+
+# max-file-manager UI state written when the folder is browsed
+.mfm.json

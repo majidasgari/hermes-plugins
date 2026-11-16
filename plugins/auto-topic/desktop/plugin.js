@@ -318,7 +318,7 @@ function ensureButton(ctx) {
   btn.type = 'button'
   btn.className = BTN_CLS
   btn.textContent = '✨ Auto-topic'
-  btn.title = 'Ask AI to title this chat from its content (emoji included)'
+  btn.title = 'Ask AI to title this chat from its content'
   btn.style.cssText =
     'appearance:none;border:none;background:transparent;cursor:pointer;' +
     'font-size:0.72rem;font-weight:600;letter-spacing:0.02em;color:var(--ui-accent, #0053fd);' +
@@ -357,7 +357,7 @@ function ensureButton(ctx) {
       btn.style.color = 'var(--ui-error, #e5484d)'
       window.setTimeout(() => {
         btn.style.color = prev
-        btn.title = 'Ask AI to title this chat from its content (emoji included)'
+        btn.title = 'Ask AI to title this chat from its content'
       }, 4000)
     } finally {
       btn.disabled = false

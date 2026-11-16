@@ -77,8 +77,11 @@ const PAYLOAD = `${BEGIN}
     for (var y = 0; y < r; y++) {
       var dy = r - y - 0.5
       var inset = Math.round(r - Math.sqrt(Math.max(0, r * r - dy * dy)))
-      if (inset <= 0) continue
       var width = Math.max(0, w - inset * 2)
+      // NEVER skip a row whose inset rounds to 0: those are the rows closest to
+      // the straight edge, and the middle rect only starts at y=r — skipping
+      // them leaves a ~5 px TRANSPARENT BAND across the window, just inside the
+      // top and bottom edges. An inset of 0 is simply a full-width row.
       list.push({ x: inset, y: y, width: width, height: 1 })
       list.push({ x: inset, y: h - 1 - y, width: width, height: 1 })
     }

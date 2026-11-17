@@ -161,6 +161,14 @@ function buildCss(settings) {
   border-radius: ${settings.radius}px;
   overflow: hidden;
 }
+
+/* The min/max/close cluster is position:fixed at the top-right, so overflow
+   on the shell above cannot clip it — it paints its own opaque band straight into
+   the corner sliver. Round ITS top-right corner to the window radius and the
+   desktop shows through there too. */
+:root[data-hermes-window-radius] [aria-label='Window controls'] {
+  border-top-right-radius: ${settings.radius}px !important;
+}
 `
       : ''
 

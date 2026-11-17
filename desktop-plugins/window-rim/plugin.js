@@ -26,16 +26,6 @@
  *    desktop shows through the four corner slivers. Radius 0 = the plain
  *    rectangle, attribute removed.
  *
- *    WINDOWS is different, and it is NOT CSS: the windows there are opaque and
- *    resizable (`transparent: true` breaks resizable windows — electron#48421),
- *    so a radius that only bends the rim stroke leaves the square corner and
- *    whatever the app paints in it visible — the "black corner" the user sees.
- *    The real fix is a native window REGION: patch/patch-windows-shape.js
- *    appends a bootstrap to the built main bundle (BaseWindow.setShape) and
- *    exposes window.hermesDesktop.setWindowShape(px); apply() calls it, so the
- *    window's own corners are cut and the desktop shows through. Without that
- *    patch the bridge is absent, apply() is a no-op, and the popover says so.
- *
  *    NOT on Settings ▸ Appearance, deliberately: that page mounts its plugin
  *    slot (`appearance.extra`) only while `subpage === undefined`, and the
  *    settings router resolves a subpage for EVERY view — `resolveSettingsSubpage`
@@ -154,6 +144,26 @@ function buildCss(settings) {
 }`
     : ''
 
+  // With a radius in force the window's own surface must stop painting where the
+  // corners are cut: body goes transparent and the two full-window shell painters
+  // stay opaque but clipped, so only the corner slivers let the desktop through.
+  // (html is cleared inline in apply() — the boot script's anti-flash colour is an
+  // inline `!important`, which no stylesheet rule can beat.)
+  const surfaces =
+    settings.radius > 0
+      ? `
+:root[data-hermes-window-radius] body {
+  background: transparent !important;
+}
+
+:root[data-hermes-window-radius] [data-contrib-shell],
+:root[data-hermes-window-radius] [data-slot='sidebar-wrapper'] {
+  border-radius: ${settings.radius}px;
+  overflow: hidden;
+}
+`
+      : ''
+
   return `
 /* Window Rim — the whole rim is this one fixed layer. */
 #${RIM_ID} {
@@ -179,6 +189,7 @@ function buildCss(settings) {
 }
 
 ${glow}
+${surfaces}
 `
 }
 
@@ -251,90 +262,30 @@ function syncFocus(rim) {
   }
 }
 
-/** The Windows shape bridge, when this install carries the patch
- *  (patch/patch-windows-shape.js). Absent on a stock build. */
-function shapeBridge() {
-  if (typeof window === 'undefined') {
-    return null
-  }
-
-  const bridge = window.hermesDesktop
-
-  return bridge && typeof bridge.setWindowShape === 'function' ? bridge : null
-}
-
-/** True when THIS window's native corners can really be rounded. */
-const CAN_SHAPE_WINDOW = shapeBridge() !== null
-
-/** Windows can only round its windows through the shape patch; on other
- *  platforms the app's own core CSS (or nothing) handles the radius. */
-const IS_WINDOWS_UI = typeof navigator !== 'undefined' && /^win/i.test(navigator.platform || '')
-
-// Last viewport geometry reported to the main process.
-let reportedViewport = ''
-
-/** Round the window itself. Renderer CSS cannot do that: the window is an
- *  opaque rectangle (on Windows `transparent: true` breaks resizable windows,
- *  which is why the app refuses it), so the shape has to be a native region.
- *  With the patch in place the preload relays the geometry to the main process,
- *  which calls setShape() on every window; without it this is a no-op and the
- *  radius only rounds the rim stroke.
- *
- *  The region is native PIXELS measured from the WINDOW's corner, while this
- *  control is CSS px measured from the CLIENT area — so the viewport, the
- *  devicePixelRatio and the window's screen position all travel with it. The
- *  client inset (8 px on the sides of a frameless Windows window) is derived
- *  from screenX/screenY; without it the region sits 8 px to the left and
- *  shaves the rim off the right edge — the "white bar on the right". */
-function applyWindowShape(radius) {
-  const bridge = shapeBridge()
-
-  if (!bridge) {
-    return
-  }
-
-  const width = window.innerWidth
-  const height = window.innerHeight
-  const dpr = window.devicePixelRatio || 1
-
-  reportedViewport = `${width}x${height}@${dpr}`
-
-  try {
-    bridge.setWindowShape({
-      dpr,
-      height,
-      radius,
-      screenX: window.screenX,
-      screenY: window.screenY,
-      width
-    })
-  } catch {
-    /* never fatal: the rim still paints */
-  }
-}
-
 /** Paint the current settings into the live stylesheet + rim node. */
 function apply() {
-  applyWindowShape(current.radius)
-
   const style = document.getElementById(STYLE_ID)
   const rim = document.getElementById(RIM_ID)
   const root = document.documentElement
 
-  // Corner radius. The core css (styles.css, "Rounded window corners") clips the
-  // app shell to --hermes-window-radius only while this attribute is present,
-  // which is what makes the desktop show through the four corners on Linux —
-  // those windows are born with an alpha surface (electron/main.ts,
-  // chatWindowSurfaceOptions), which is the whole reason a radius can work at
-  // all. At 0 the attribute is absent, so the window is the plain rectangle the
-  // app always drew and nothing has to be undone.
+  // Corner radius. The app clips its shell to --hermes-window-radius while this
+  // attribute is present (injected rule above, plus the core one in styles.css),
+  // and the Linux windows are born with an alpha surface (electron/main.ts,
+  // chatWindowSurfaceOptions) — that pair is what lets the desktop through the
+  // four corners. At 0 the attribute is absent, so the window is the plain
+  // rectangle the app always drew and nothing has to be undone.
   if (root && root.style && typeof root.setAttribute === 'function') {
     if (current.radius > 0) {
       root.style.setProperty('--hermes-window-radius', `${current.radius}px`)
       root.setAttribute('data-hermes-window-radius', String(current.radius))
+      // The boot script paints an opaque anti-flash colour on <html> as an INLINE
+      // `!important`, which beats every stylesheet rule — without this the corner
+      // slivers come back as solid squares.
+      root.style.setProperty('background-color', 'transparent', 'important')
     } else {
       root.style.removeProperty('--hermes-window-radius')
       root.removeAttribute('data-hermes-window-radius')
+      root.style.removeProperty('background-color')
     }
   }
 
@@ -536,13 +487,6 @@ function RimChip({ ctx }) {
             )
           )
         ),
-        IS_WINDOWS_UI && !CAN_SHAPE_WINDOW
-          ? h(
-              'div',
-              { style: { color: 'var(--ui-text-tertiary, #8b8f98)', fontSize: '10px', lineHeight: 1.7 } },
-              'گردی گوشه‌ی خود پنجره در ویندوز به پچ نیاز دارد: patch/patch-windows-shape.js'
-            )
-          : null,
         toggleRow('کمرنگ در حالت بی‌فوکوس', settings.dimUnfocused, value => update({ dimUnfocused: value })),
         toggleRow('خط مویی درونی', settings.hairline, value => update({ hairline: value })),
         toggleRow('درخشش', settings.glow, value => update({ glow: value }))
@@ -618,16 +562,6 @@ export default {
 
     if (dom) {
       const onFocus = () => syncFocus(dom.rim)
-
-      // The region is sized from THIS viewport, so a resize re-reports it.
-      // (The main process also repaints synchronously on resize; this only
-      // refreshes the CSS size its delta is measured from.)
-      let resizeTimer = 0
-
-      ctx?.addEventListener?.(window, 'resize', () => {
-        window.clearTimeout(resizeTimer)
-        resizeTimer = window.setTimeout(() => applyWindowShape(current.radius), 150)
-      })
 
       // Scoped listeners: the host removes them on reload/disable, so a stale
       // build can never keep reacting to focus changes.

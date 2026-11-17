@@ -840,9 +840,10 @@ async function refresh(ctx) {
     const error = caught?.message ? String(caught.message) : 'Could not read this session.'
 
     // A brand-new chat has no persisted session yet, and a bot tile's session may
-    // live on another backend: both doors answer "not found". That is an EMPTY
-    // list, not a failure — an error state would be a lie about this session.
-    if (/not found|4001|404/i.test(error)) {
+    // live on another backend: both doors answer "not found". "No live session to
+    // read." is the same story from the gateway door — a chat the runtime has not
+    // loaded is EMPTY here, not a failure; an error state would be a lie about it.
+    if (/not found|4001|404|no live session/i.test(error)) {
       publish({ edits: [], error: '', status: 'empty' })
       setPanePresence(ctx)
 
@@ -1274,19 +1275,10 @@ export default {
     ctx.onDispose(host.state.focusedStoredSessionId.subscribe(poke))
     ctx.onDispose(host.state.activeSessionId.subscribe(poke))
 
-    // First read, and the breadcrumb that proves the whole chain on THIS build
-    // (history door → fold → pane registration) without anyone opening a pane.
-    // Only failures are worth a line in the log once it works.
-    void refresh(ctx).then(result => {
-      if (result.status === 'ready') {
-        const added = result.edits.reduce((total, edit) => total + edit.added, 0)
-        const removed = result.edits.reduce((total, edit) => total + edit.removed, 0)
-
-        console.error(`[${ID}] ready (${result.source}): ${result.edits.length} file(s), +${added} −${removed}`)
-      } else if (result.status !== 'empty') {
-        console.error(`[${ID}] not ready: ${result.error || result.status}`)
-      }
-    })
+    // Silence on success, on purpose: desktop.log renders console.error as
+    // "[renderer error:main]", so a breadcrumb here made every session switch look
+    // like a failure. Failures report themselves in refresh().
+    void refresh(ctx)
 
     // Transcript hand-off (see the note above): capture phase, so a card row
     // click never reaches the core Review pane, which is a git reading.

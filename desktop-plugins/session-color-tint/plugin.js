@@ -234,11 +234,21 @@ export default {
       /* a stale teardown must never wedge this one */
     }
 
+    let lastError = ''
+
     const tick = () => {
       try {
         apply()
+        lastError = ''
       } catch (error) {
-        console.error(`[${ID}] tint failed`, error)
+        // A 600 ms tick would otherwise repeat the same failure 100×/min into
+        // desktop.log; report a changed failure once.
+        const detail = String(error?.message || error)
+
+        if (detail !== lastError) {
+          lastError = detail
+          console.error(`[${ID}] tint failed`, error)
+        }
       }
     }
 
